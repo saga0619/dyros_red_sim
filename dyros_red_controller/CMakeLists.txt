@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(dyros_red_controller)
 
-add_compile_options(-std=c++11)
+add_compile_options(-std=c++11 -pthread -Ofast)
 
 find_package(catkin REQUIRED COMPONENTS
     dyros_red_msgs
@@ -11,11 +11,11 @@ find_package(catkin REQUIRED COMPONENTS
     sensor_msgs
     std_msgs
     realtime_tools
-    Eigen3
+    eigen_conversions
     )
 find_package(Eigen3 REQUIRED)
 catkin_package(
-    DEPENDS   dyros_red_msgs geometry_msgs roscpp sensor_msgs std_msgs realtime_tools Eigen3
+    DEPENDS   dyros_red_msgs geometry_msgs roscpp sensor_msgs std_msgs realtime_tools eigen_conversions
     CATKIN_DEPENDS # TODO
     INCLUDE_DIRS include
     LIBRARIES # TODO

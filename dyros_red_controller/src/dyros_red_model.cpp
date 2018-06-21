@@ -470,7 +470,7 @@ Eigen::VectorXd DyrosRedModel::getGravityCompensation(){
 
 
 
-  double epsilon = 1e-6;
+  double epsilon = 1e-7;
   Eigen::JacobiSVD<Eigen::MatrixXd> svd(aa ,Eigen::ComputeThinU | Eigen::ComputeThinV);
   double tolerance = epsilon * std::max(aa.cols(), aa.rows()) *svd.singularValues().array().abs()(0);
   Eigen::MatrixXd ppinv = svd.matrixV() *  (svd.singularValues().array().abs() > tolerance).select(svd.singularValues().array().inverse(), 0).matrix().asDiagonal() * svd.matrixU().adjoint();
