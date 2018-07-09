@@ -367,8 +367,8 @@ void ControlBase::compute()
             qp_lb(i) = _fstar(i);
           }
         }
-       cout <<"qp_lb" <<endl << qp_lb.transpose() << endl <<endl;
-       cout <<"qp_ub" <<endl << qp_ub.transpose() << endl <<endl;
+       //cout <<"qp_lb" <<endl << qp_lb.transpose() << endl <<endl;
+       //cout <<"qp_ub" <<endl << qp_ub.transpose() << endl <<endl;
 
         for(int i=0; i<taskdof*taskdof; i++)
         {
@@ -434,9 +434,9 @@ void ControlBase::compute()
       {
         fstar_Opt(i) = xOpt[i];
       }
-      cout <<"fstar" <<endl << _fstar.transpose() << endl <<endl;
-      cout << "qp fstar" <<endl << fstar_Opt.transpose() << endl <<endl;
-      cout << "status " << m_status << endl <<endl;
+      //cout <<"fstar" <<endl << _fstar.transpose() << endl <<endl;
+      //cout << "qp fstar" <<endl << fstar_Opt.transpose() << endl <<endl;
+      //cout << "status " << m_status << endl <<endl;
 
 
       //cout<<"Fc original"<<endl << WBCMain._Fc_LocalContactFrame.transpose() << endl <<endl;
@@ -906,7 +906,7 @@ void ControlBase::ResultantWrenchTwoContact(const Vector3D& P1, const Vector3D& 
 /* ------------------------------------------------------------------------------------------------------------------------------ */
 /* ------------------------------------------------------------------------------------------------------------------------------ */
 /* ------------------------------------------------------------------------------------------------------------------------------ */
-
+//test//
 void ControlBase::WrenchRedistributionTwoFootContact(double eta_cust, double footlength, double footwidth, double staticFrictionCoeff, double ratio_x, double ratio_y, Vector3D P1, Vector3D P2, VectorXd &F12, VectorXd& ResultantForce, VectorXd& ForceRedistribution, double& eta)
 {
   MatrixXd W(6,12);
