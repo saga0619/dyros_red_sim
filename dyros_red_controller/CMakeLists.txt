@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 2.8.3)
 project(dyros_red_controller)
 
 add_compile_options(-std=c++11)
+#add_compile_options(-c -03 -w -DLINUX -fPIC)
 
 find_package(catkin REQUIRED COMPONENTS
     dyros_red_msgs
@@ -11,11 +12,20 @@ find_package(catkin REQUIRED COMPONENTS
     sensor_msgs
     std_msgs
     realtime_tools
-    Eigen3
+    eigen_conversions
     )
 find_package(Eigen3 REQUIRED)
+
+# qpOASES #########
+#FIND_PATH(qpOASES_INCLUDE_DIR qpOASES.hpp /usr/include)
+#FIND_LIBRARY(qpOASES_LIBRARY
+#    NAMES qpOASES
+#    PATHS /usr/lib)
+
+
+
 catkin_package(
-    DEPENDS   dyros_red_msgs geometry_msgs roscpp sensor_msgs std_msgs realtime_tools Eigen3
+    DEPENDS   dyros_red_msgs geometry_msgs roscpp sensor_msgs std_msgs realtime_tools eigen_conversions
     CATKIN_DEPENDS # TODO
     INCLUDE_DIRS include
     LIBRARIES # TODO
@@ -25,6 +35,7 @@ include_directories(
     ${catkin_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIRS}
+    #${e}
     )
 
 
@@ -42,13 +53,16 @@ file(GLOB CONTROLLER_SRC
     "src/dyros_red_model.cpp"
     "src/task_controller.cpp"
     )
-
+file(GLOB WHOLEBODY_CTRL_SRC
+    "src/wholebodycontroller.cpp"
+    )
 
 add_library(dyros_red_controller_lib
     ${BRIDGE_SRC}
     ${CONTROLLER_SRC}
-    #  ${UPPER_SRC}
+    ${WHOLEBODY_CTRL_SRC}
     )
+
 
 add_executable(dyros_red_controller src/dyros_red_controller.cpp)
 target_link_libraries(dyros_red_controller_lib
@@ -58,6 +72,8 @@ target_link_libraries(dyros_red_controller_lib
     -L/usr/local/lib
     -lrbdl
     -lrbdl_urdfreader
+    #/usr/local/lib/python2.7/dist-package/qpoases.so
+    -lqpOASES
     )
 target_link_libraries(dyros_red_controller
     dyros_red_controller_lib

@@ -19,6 +19,10 @@ SimulationInterface::SimulationInterface(ros::NodeHandle &nh, double Hz):
 
   imu_sub_ = nh.subscribe("/vrep_ros_interface/imu", 100, &SimulationInterface::imuCallback, this);
   joint_sub_ = nh.subscribe("/vrep_ros_interface/joint_state", 100, &SimulationInterface::jointCallback, this);
+  virtual_joint_lin_position_sub_ = nh.subscribe("/vrep_ros_interface/virtual_joint_lin_position_state", 100, &SimulationInterface::VirtualjointLinPositionCallback, this);
+  virtual_joint_lin_velocity_sub_ = nh.subscribe("/vrep_ros_interface/virtual_joint_lin_velocity_state", 100, &SimulationInterface::VirtualjointLinVelocityCallback, this);
+  virtual_joint_rot_position_sub_ = nh.subscribe("/vrep_ros_interface/virtual_joint_rot_position_state", 100, &SimulationInterface::VirtualjointRotPositionCallback, this);
+  virtual_joint_rot_velocity_sub_ = nh.subscribe("/vrep_ros_interface/virtual_joint_rot_velocity_state", 100, &SimulationInterface::VirtualjointRotVelocityCallback, this);
   left_ft_sub_ = nh.subscribe("/vrep_ros_interface/left_foot_ft", 100, &SimulationInterface::leftFTCallback, this);
   right_ft_sub_ = nh.subscribe("/vrep_ros_interface/right_foot_ft", 100, &SimulationInterface::rightFTCallback, this);
 
@@ -94,10 +98,8 @@ void SimulationInterface::writeDevice()
   for(int i=0;i<total_dof_;i++) {
     //std::cout<<"for loop"<<std::endl;
     //std::cout<<"done : "<<i<<" ::: effort : " <<torque_desired(i)<<std::endl;
-    joint_set_msg_.position[i] = position_desired(i);
-    joint_set_msg_.effort[i] = torque_desired(i);
-
-
+    joint_set_msg_.position[i] = _position_d(i);
+    joint_set_msg_.effort[i] = _torque_d(i);
   }
   vrep_joint_set_pub_.publish(joint_set_msg_);
   vrepStepTrigger();
@@ -116,9 +118,6 @@ void SimulationInterface::wait()
 
 
 // Callback functions
-
-
-
 void SimulationInterface::simulationTimeCallback(const std_msgs::Float32ConstPtr& msg)
 {
   ROS_INFO_ONCE("simtimeCB");
@@ -140,16 +139,45 @@ void SimulationInterface::jointCallback(const sensor_msgs::JointStateConstPtr& m
     {
       if(DyrosRedModel::JOINT_NAME[i] == msg->name[j].data())
       {
+        _q(i) = msg->position[j];
+        _q_virtual(i+6) = msg->position[j];
 
-        q_(i) = msg->position[j];
-        q_virtual_(i+6) = msg->position[j];
-
-        q_dot_(i) = msg->velocity[j];
-        q_dot_virtual_(i+6)=msg->velocity[j];
-        torque_(i) = msg->effort[j];
+        _qdot(i) = msg->velocity[j];
+        _qdot_virtual(i+6)=msg->velocity[j];
+        _torque(i) = msg->effort[j];
       }
     }
   }
+}
+
+void SimulationInterface::VirtualjointLinPositionCallback(const geometry_msgs::Vector3StampedConstPtr & msg)
+{
+  ROS_INFO_ONCE("VPrismaticJointPosCB");
+  _q_virtual(0) =  msg->vector.x;
+  _q_virtual(1) =  msg->vector.y;
+  _q_virtual(2) =  msg->vector.z;
+}
+void SimulationInterface::VirtualjointRotPositionCallback(const geometry_msgs::Vector3StampedConstPtr & msg)
+{
+  ROS_INFO_ONCE("VPrismaticJointRotCB");
+  _q_virtual(3) = msg->vector.x;
+  _q_virtual(4) = msg->vector.y;
+  _q_virtual(5) = msg->vector.z;
+}
+
+void SimulationInterface::VirtualjointLinVelocityCallback(const geometry_msgs::Vector3StampedConstPtr& msg)
+{
+  ROS_INFO_ONCE("VRotationJointPosCB");
+  _qdot_virtual(0) =  msg->vector.x;
+  _qdot_virtual(1) =  msg->vector.y;
+  _qdot_virtual(2) =  msg->vector.z;
+}
+void SimulationInterface::VirtualjointRotVelocityCallback(const geometry_msgs::Vector3StampedConstPtr& msg)
+{
+  ROS_INFO_ONCE("VRotationJointRotCB");
+  _qdot_virtual(3) = msg->vector.x;
+  _qdot_virtual(4) = msg->vector.y;
+  _qdot_virtual(5) = msg->vector.z;
 }
 
 void SimulationInterface::leftFTCallback(const geometry_msgs::WrenchStampedConstPtr& msg)
@@ -186,9 +214,9 @@ void SimulationInterface::imuCallback(const sensor_msgs::ImuConstPtr &msg)
   Pelvis_angular_velocity_(0) = msg->angular_velocity.x;
   Pelvis_angular_velocity_(1) = msg->angular_velocity.y;
   Pelvis_angular_velocity_(2) = msg->angular_velocity.z;
-  for(int i=0;i<3;i++){
-    q_dot_virtual_(i+3)=Pelvis_angular_velocity_(i);
-  }
+ // for(int i=0;i<3;i++){
+ //   _qdot_virtual(i+3)=Pelvis_angular_velocity_(i);
+ // }
 
 
   //std::cout<<"q virtual "<<std::endl<<q_virtual_<<std::endl;
@@ -197,9 +225,9 @@ void SimulationInterface::imuCallback(const sensor_msgs::ImuConstPtr &msg)
   //model_.setquat(Pelvis_quaternion,q_virtual_);
 
 
-  q_virtual_(3)=euler_(0);
-  q_virtual_(4)=euler_(1);
-  q_virtual_(5)=euler_(2);
+  //_q_virtual(3)=euler_(0);
+  //_q_virtual(4)=euler_(1);
+  //_q_virtual(5)=euler_(2);
 
 
 

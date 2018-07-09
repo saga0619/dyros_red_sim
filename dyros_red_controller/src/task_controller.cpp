@@ -63,7 +63,7 @@ void TaskController::updateControlMask(unsigned int *mask)
     {
       if (mask[i] >= PRIORITY * 2)
       {
-        // Higher priority task detected
+        // Higher priority task detected2
         ee_enabled_[index] = false;
         target_transform_[index] = model_.getCurrentTrasmfrom((DyrosRedModel::EndEffector)index);
         end_time_[index] = control_time_;

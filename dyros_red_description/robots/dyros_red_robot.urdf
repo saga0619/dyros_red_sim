@@ -1,11 +1,17 @@
 <robot name="dyros_red_description">
-  <link name="world"/>
+
+
+  <link name="base_link"/>
+
+
   <joint name="virtual" type="floating">
     <origin xyz="0 0 0" rpy="0 0 0"/>
-    <parent link ="world"/>
     <child link="Pelvis_Link"/>
+    <parent link ="base_link"/>
     <limit effort="30" velocity="1.0" lower="-3.14" upper="3.14"/>
   </joint>
+  
+
   <link
     name="Pelvis_Link">
     <inertial>

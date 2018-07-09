@@ -26,6 +26,10 @@ private:  // CALLBACK
   void simulationTimeCallback(const std_msgs::Float32ConstPtr& msg);
   void simulationStepDoneCallback(const std_msgs::BoolConstPtr& msg);
   void jointCallback(const sensor_msgs::JointStateConstPtr& msg);
+  void VirtualjointLinPositionCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
+  void VirtualjointRotPositionCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
+  void VirtualjointLinVelocityCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
+  void VirtualjointRotVelocityCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
   void leftFTCallback(const geometry_msgs::WrenchStampedConstPtr& msg);
   void rightFTCallback(const geometry_msgs::WrenchStampedConstPtr& msg);
   void imuCallback(const sensor_msgs::ImuConstPtr& msg);
@@ -61,6 +65,10 @@ private:
 
   ros::Subscriber imu_sub_;
   ros::Subscriber joint_sub_;
+  ros::Subscriber virtual_joint_lin_position_sub_;
+  ros::Subscriber virtual_joint_lin_velocity_sub_;
+  ros::Subscriber virtual_joint_rot_position_sub_;
+  ros::Subscriber virtual_joint_rot_velocity_sub_;
   ros::Subscriber left_ft_sub_;
   ros::Subscriber right_ft_sub_;
 

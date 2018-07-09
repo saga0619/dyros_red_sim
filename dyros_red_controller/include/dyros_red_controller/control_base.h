@@ -7,7 +7,7 @@
 
 // System Library
 #include <termios.h>
- 
+
 // ROS Library
 #include <ros/ros.h>
 #include <realtime_tools/realtime_publisher.h>
@@ -36,14 +36,17 @@
 // User Library
 #include "math_type_define.h"
 #include "dyros_red_controller/dyros_red_model.h"
-// #include "Upperbody_Controller.h"
+#include "wholebodycontroller.h"
+#include <qpOASES.hpp>
 
 
 namespace dyros_red_controller
 {
 
+using namespace qpOASES;
 using namespace Eigen;
 using namespace std;
+using namespace DyrosMath;
 
 class ControlBase
 {
@@ -61,12 +64,10 @@ public:
   virtual void wait()=0;  // wait
 
   bool checkStateChanged();
-
   void stateChangeEvent();
-
-
-
   const double getHz() { return Hz_; }
+
+
 protected:
 
   //unsigned int joint_id_[DyrosRedModel::MODEL_DOF];
@@ -77,15 +78,18 @@ protected:
   int ui_update_count_;
   bool is_first_boot_;
 
-  VectorQd q_; // current q
-  VectorQd q_dot_; // current qdot
-  VectorQd torque_; // current joint toruqe
+  bool _kinematics_update;
+  bool _dynamics_update;
 
-  VectorVQd q_virtual_;
-  VectorVQd q_dot_virtual_;
+  VectorQd _q; // current q
+  VectorQd _qdot; // current qdot
+  VectorQd _torque; // current joint toruqe
 
-  Vector6d left_foot_ft_; // current left ft sensor values
-  Vector6d right_foot_ft_; // current right ft sensor values
+  VectorVQd _q_virtual; //including virtual joints
+  VectorVQd _qdot_virtual; //including virtual joints
+
+  Vector6d _FT_left_foot; // current left ft sensor values
+  Vector6d _FT_right_foot; // current right ft sensor values
 
   tf::Quaternion imu_data_; ///< IMU data with filter
 
@@ -98,17 +102,78 @@ protected:
   Vector3d Pelvis_angular_velocity_;
   Quaterniond Pelvis_quaternion;
 
-
-
-
-  VectorQd desired_q_; // current desired joint values
-  VectorQd torque_desired;
+  VectorQd _q_d; // current desired joint values
+  VectorQd _torque_d; //command for joint torque control
+  VectorQd _position_d; //command for joint position control
   VectorQd torque_damping;
-  VectorQd position_desired;
 
   int total_dof_;
 
-  DyrosRedModel model_;
+  DyrosRedModel _model;
+
+  //Variables for whole-body control
+  void WBCInitialize();
+  MatrixXd setWBCContactJacobian(const int ContactState);
+  MatrixXd setWBCTaskJacobian(const int TaskState);
+  void WrenchRedistributionTwoFootContact(double eta_cust, double footlength, double footwidth, double staticFrictionCoeff, double ratio_x, double ratio_y, Vector3D P1, Vector3D P2, VectorXd &F12, VectorXd& ResultantForce, VectorXd& ForceRedistribution, double& eta);
+  void WrenchRedistributionTwoFootContact_CustomEta(double Eta_Standard, double footlength, double footwidth, double staticFrictionCoeff, double ratio_x, double ratio_y, Vector3D P1, Vector3D P2, VectorXd &F12, VectorXd& ResultantForce,  VectorXd& ForceRedistribution);
+  void ResultantWrenchTwoContact(const Vector3D& P1, const Vector3D& P2, const Matrix3d& Rot, const VectorXd& F12, MatrixXd &W, VectorXd& ResultantForce);
+  int _ContactState;
+  int _TaskState;
+  MatrixXd _Jc;
+  MatrixXd _Jc_dot;
+  MatrixXd _Jc_bar_T_S_k_T;
+  VectorXd _pc;
+  VectorXd _Fc_LocalContactFrame;
+  MatrixXd _J;
+  MatrixXd _J_wbc_T;
+  MatrixXd _lambda_wbc;
+  VectorQd _torque_gravity;
+  VectorQd _torque_task;
+  VectorQd _torque_contact;
+  VectorXd _fstar;
+
+  //Variables for task set
+  bool _bool_init;
+
+  Vector3d _init_pelvis_position;
+  Matrix3d _init_pelvis_rotation;
+  Vector3d  _init_right_arm_position;
+  Matrix3d  _init_right_arm_rotation;
+  Vector3d  _init_left_arm_position;
+  Matrix3d  _init_left_arm_rotation;
+
+  Vector3d _desired_pelvis_position;
+  Vector3d _desired_pelvis_velocity;
+  Matrix3d _desired_pelvis_rotation;
+  Vector3d _desired_left_arm_position;
+  Vector3d _desired_left_arm_velocity;
+  Matrix3d _desired_left_arm_rotation;
+  Vector3d _desired_right_arm_position;
+  Vector3d _desired_right_arm_velocity;
+  Matrix3d _desired_right_arm_rotation;
+  Vector3d _desired_left_foot_position;
+  Matrix3d _desired_left_foot_rotation;
+  Vector3d _desired_right_foot_position;
+  Matrix3d _desired_right_foot_rotation;
+
+  Vector3d _pelvis_position_error;
+  Vector3d _pelvis_velocity_error;
+  Vector3d _pelvis_orientation_error;
+  Vector3d _left_arm_position_error;
+  Vector3d _left_arm_velocity_error;
+  Vector3d _left_arm_orientation_error;
+  Vector3d _right_arm_position_error;
+  Vector3d _right_arm_velocity_error;
+  Vector3d _right_arm_orientation_error;
+  Vector3d _left_foot_position_error;
+  Vector3d _left_foot_orientation_error;
+  Vector3d _right_foot_position_error;
+  Vector3d _right_foot_orientation_error;
+  VectorXd _xdot;
+
+
+
   //TaskController task_controller_;
 
 protected:

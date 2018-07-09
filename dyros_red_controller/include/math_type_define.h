@@ -6,7 +6,6 @@
 // constexpr size_t MAX_DOF=50;
 
 #include <Eigen/Dense>
-//#include <eigen3/Eigen/Dense>
 
 #define GRAVITY 9.80665
 #define MAX_DOF 50U
@@ -44,6 +43,13 @@ typedef Matrix<rScalar, 8, 4>	Matrix8x4d;
 typedef Matrix<rScalar, -1, 1, 0, MAX_DOF, 1> VectorJXd;
 typedef Matrix<rScalar, -1, 1, 0, 12, 1> VectorLXd; //Leg IK
 typedef Matrix<rScalar, -1, -1, 0, MAX_DOF, MAX_DOF> MatrixJXd;
+
+//for whole-body control class
+//typedef Matrix<rScalar, 3, 1>	Vector3D;
+//typedef Matrix<rScalar, 3, 3>	Matrix3D;
+//typedef Matrix<rScalar, 6, 1>	Vector6D;
+//typedef Matrix<rScalar, 6, 6>	Matrix6D;
+//typedef Matrix<rScalar, 4, 3>	HTransform;
 
 //Complex
 typedef Matrix<std::complex<double>,8,4> Matrix8x4cd;

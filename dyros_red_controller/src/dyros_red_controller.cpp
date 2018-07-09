@@ -20,54 +20,43 @@ int main(int argc, char **argv)
     ControlBase *ctr_obj;
 
     double Hz;
-    nh.param<double>("control_frequency", Hz, 200.0);
-
-    /*
-    // FOR DEBUG ATTACHMENT
-    char g;
-    cout << "press something \n";
-    cin >> g;
-    */
+    nh.param<double>("control_frequency", Hz, 1000.0); //simulation freq
 
     ctr_obj = new SimulationInterface(nh, Hz);
 
-
-
-
-
     while(ros::ok())
     {
-        ros::Time time_temp = ros::Time::now();
+       // ros::Time time_temp = ros::Time::now();
         ctr_obj->readDevice();
-        double readDevice_time = ros::Time::now().toSec() - time_temp.toSec();
+       // double readDevice_time = ros::Time::now().toSec() - time_temp.toSec();
 
 
-        time_temp = ros::Time::now();
+       // time_temp = ros::Time::now();
         ctr_obj->update();
-        double update_time = ros::Time::now().toSec() - time_temp.toSec();
+       // double update_time = ros::Time::now().toSec() - time_temp.toSec();
 
 
-        time_temp = ros::Time::now();
+        //time_temp = ros::Time::now();
         ctr_obj->compute();
-        double compute_time = ros::Time::now().toSec()-time_temp.toSec();
+       // double compute_time = ros::Time::now().toSec()-time_temp.toSec();
 
-        time_temp = ros::Time::now();
+        //time_temp = ros::Time::now();
         ctr_obj->reflect();
-        double reflect_time = ros::Time::now().toSec()-time_temp.toSec();
+        //double reflect_time = ros::Time::now().toSec()-time_temp.toSec();
 
-        time_temp = ros::Time::now();
+        //time_temp = ros::Time::now();
         ctr_obj->writeDevice();
-        double writeDevice_time = ros::Time::now().toSec()-time_temp.toSec();
+        //double writeDevice_time = ros::Time::now().toSec()-time_temp.toSec();
 
-        time_temp = ros::Time::now();
+        //time_temp = ros::Time::now();
         ctr_obj->wait();
-        double wait_time = ros::Time::now().toSec()-time_temp.toSec();
+        //double wait_time = ros::Time::now().toSec()-time_temp.toSec();
 
-        double total_time = readDevice_time + update_time + compute_time + reflect_time + writeDevice_time + wait_time;
+        //double total_time = readDevice_time + update_time + compute_time + reflect_time + writeDevice_time + wait_time;
 
-        double simultation_real_Hz = 1/total_time;
+       // double simultation_real_Hz = 1/total_time;
 
-        ROS_INFO( "\n:::::::::::::::::::: TIME INFO ::::::::::::::::::\n Current Simulation Frequency : %4.2f Hz \n Realtime Factor : %4.2f \n\n readDevice : %3.4f ms\n update : %3.4f ms\n compute : %3.4f ms\n reflect : %3.4f ms\n writeDevice : %3.4f ms\n wait : %3.4f ms\n",simultation_real_Hz,200/simultation_real_Hz,readDevice_time*1000,update_time*1000,compute_time*1000,reflect_time*1000,writeDevice_time*1000,wait_time*1000);
+        //ROS_INFO( "\n:::::::::::::::::::: TIME INFO ::::::::::::::::::\n Current Simulation Frequency : %4.2f Hz \n Realtime Factor : %4.2f \n\n readDevice : %3.4f ms\n update : %3.4f ms\n compute : %3.4f ms\n reflect : %3.4f ms\n writeDevice : %3.4f ms\n wait : %3.4f ms\n",simultation_real_Hz,200/simultation_real_Hz,readDevice_time*1000,update_time*1000,compute_time*1000,reflect_time*1000,writeDevice_time*1000,wait_time*1000);
     }
 
     delete ctr_obj;
