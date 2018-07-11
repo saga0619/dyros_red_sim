@@ -12,10 +12,11 @@ find_package(catkin REQUIRED COMPONENTS
     std_msgs
     realtime_tools
     eigen_conversions
+    mujoco_ros_msgs
     )
 find_package(Eigen3 REQUIRED)
 catkin_package(
-    DEPENDS   dyros_red_msgs geometry_msgs roscpp sensor_msgs std_msgs realtime_tools eigen_conversions
+    DEPENDS   dyros_red_msgs geometry_msgs roscpp sensor_msgs std_msgs realtime_tools eigen_conversions mujoco_ros_msgs
     CATKIN_DEPENDS # TODO
     INCLUDE_DIRS include
     LIBRARIES # TODO
@@ -35,8 +36,7 @@ add_custom_target(dyros_red_control_headers SOURCES ${HeaderFiles})
 file(GLOB BRIDGE_SRC
     "src/simulation_interface.cpp"
     "src/control_base.cpp"
-    #"include/dyros_red_controller/dyros_red_model.h"
-    #  "src/hardware_interface.cpp"
+    "src/mujoc_interface.cpp"
     )
 file(GLOB CONTROLLER_SRC
     "src/dyros_red_model.cpp"

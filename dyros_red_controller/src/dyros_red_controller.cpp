@@ -5,6 +5,7 @@
 
 #include <ros/ros.h>
 #include "dyros_red_controller/simulation_interface.h"
+#include "dyros_red_controller/mujoco_interface.h"
 
 using namespace dyros_red_controller;
 
