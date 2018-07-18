@@ -1,6 +1,8 @@
 #ifndef WHOLEBODYCONTROLLER_H
 #define WHOLEBODYCONTROLLER_H
 
+//#define EIGEN_3_3 //if the eigen version is latest version after 3.3, use this definition
+
 #include <iostream>
 #include <Eigen/Dense>
 #include <Eigen/SVD>
@@ -26,6 +28,7 @@ public:
   virtual ~CWholeBodyControl();
 
 public:
+
   void updateLocaltoGlobalDynamicsParameters(const HTransform &Tbase, const VectorXd &localG, const MatrixXd &localC, const MatrixXd &localA);
   void updateGlobalDynamicsParameters(const VectorXd &globalG, const VectorXd &globalC, const MatrixXd &globalA);
   void updateLocaltoGlobalKinematicsParameters(const Vector6D &xdot_base, const VectorXd &qdot); //require only when calculating Coriolis/centrifugal force compensation torque
@@ -49,6 +52,7 @@ public:
   MatrixXd _S_k;
   MatrixXd _S_k_T;
   MatrixXd _Jc_bar_T;
+  MatrixXd _Jc_bar_T_S_k_T;
   VectorXd _pc;
   MatrixXd _Pc;
   VectorXd _GravityCompensationTorque;
@@ -59,6 +63,7 @@ public:
   MatrixXd _W;
   MatrixXd _J_bar_T;
   MatrixXd _J_k_T;
+  MatrixXd _J_k_T_Lambda;
   MatrixXd _V2forContactWrenchRedistribution;
   MatrixXd _N_k_T;
   MatrixXd _Jc;
@@ -70,10 +75,12 @@ public:
   int _ContactState;
 
 private:
+
   int _JOINTNUM;
   bool _bDynamicParameter;
   bool _bContactParameter;
   bool _bTaskParameter;
+  bool _bContactWrenchCalc;
   VectorXd _localG;
   VectorXd _localb;
   MatrixXd _localC;

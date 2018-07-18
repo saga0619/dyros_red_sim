@@ -32,6 +32,9 @@ ControlBase::ControlBase(ros::NodeHandle &nh, double Hz) :
 
   parameterInitialize();
   WBCInitialize();
+  QPInitialize();
+  _binit_variables = false;
+  _bstate_change = true;
 }
 
 bool ControlBase::checkStateChanged()
@@ -55,6 +58,7 @@ void ControlBase::update()
   for(int i=0;i<DyrosRedModel::MODEL_DOF+1;i++)
   {
     _model.Link_pos_Update(i);
+    _model.Link_rot_Update(i);
   }
   _kinematics_update = _model.updateKinematics(_q_virtual,_qdot_virtual);  // Update kinematics
   _dynamics_update = _model.updateDynamics(_kinematics_update); //update dynamics
@@ -121,6 +125,43 @@ void ControlBase::compute()
     /* --------------------------------------------------------- */
 
     /* --------------------------------------------------------- */
+    /* ----------------------- Initialize ---------------------- */
+    /* --------------------------------------------------------- */
+    int contactdof = 12;
+    int taskdof = 18;
+    if(_ContactState == 0) //double foot contact
+    {
+      contactdof = 12;
+    }
+    else if(_ContactState == 1 ||_ContactState == 2) //single foot contact
+    {
+      contactdof = 6;
+    }
+    const int contactdof_QP = contactdof;
+
+    if(_TaskState == 0) //double foot contact
+    {
+      taskdof= 18;
+    }
+    else if(_TaskState == 1 ||_TaskState == 2) //single foot contact
+    {
+      taskdof= 25;
+    }
+    const int taskdof_QP = taskdof;
+
+
+    //reset variables
+    if(_preContactState != _ContactState || _preTaskState != _TaskState || _binit_variables == false)
+    {
+      //set Contact State
+      _binit_variables = true;
+      _bstate_change = true;
+
+      WBCReset(contactdof,taskdof);
+      QPReset(contactdof,taskdof);      
+    }
+
+    /* --------------------------------------------------------- */
     /* ------------------- whole-body dynamics ----------------- */
     /* --------------------------------------------------------- */
 
@@ -128,62 +169,24 @@ void ControlBase::compute()
     {
       CWholeBodyControl WBCMain(31);
       WBCMain.updateGlobalDynamicsParameters(_model._G,_model._b,_model._A); //update dynamic info
-
-      //set Contact State
-      int contactdof = 12;      
-      if(_ContactState == 0) //double foot contact
-      {
-        contactdof = 12;        
-        _Jc.resize(contactdof,DyrosRedModel::MODEL_DOF+6);
-      }
-      else if(_ContactState == 1 ||_ContactState == 2) //single foot contact
-      {
-        contactdof = 6;
-        _Jc.resize(contactdof,DyrosRedModel::MODEL_DOF+6);
-      }
-      const int contactdof_QP = contactdof;
-      _Jc_dot.setZero();
       _Jc = setWBCContactJacobian(_ContactState);//Get predefined Contact Jacobian
-
       WBCMain.updateContactParameters(_Jc,_Jc_dot,_ContactState); //update contact Jacobian
-      WBCMain.calculateContactSpaceInvDynamics(); //calculate contact space inverse dynamics
-      _Jc_bar_T_S_k_T = WBCMain._Jc_bar_T*WBCMain._S_k_T;
+      WBCMain.calculateContactSpaceInvDynamics(); //calculate contact space inverse dynamics      
       _pc = WBCMain._pc;
       WBCMain.calculateGravityCoriolisCompensationTorque();//calculate gravity compensation torque and coriolis centrifugal compensation torque
+      _torque_gravity = WBCMain._GravityCompensationTorque;//get gravity compensation torque
+      _J = setWBCTaskJacobian(_TaskState);
+      _xdot = _J*_qdot_virtual;
+      WBCMain.updateTaskParameters(_J,_TaskState);
+      WBCMain.calculateContactConstrainedTaskJacobian(); //get Task Jacobian and Lambda matrix
+      WBCMain.calculateSVDofWeightingMatrix();
 
-       _torque_gravity = WBCMain._GravityCompensationTorque;
 
-       //set Task State
-       int taskdof = 0;//task space dof       
-       int nulldof = 0;//null space dof
-       if(_TaskState == 0) //double foot contact
-       {
-          taskdof= 18;
-         _J.resize(taskdof,DyrosRedModel::MODEL_DOF+6);
-       }
-       else if(_TaskState == 1 ||_TaskState == 2) //single foot contact
-       {
-         taskdof= 25;         
-         _J.resize(taskdof,DyrosRedModel::MODEL_DOF+6);
-       }
-       const int taskdof_QP = taskdof;
-       _J = setWBCTaskJacobian(_TaskState);
-       _xdot = _J*_qdot_virtual;
-       WBCMain.updateTaskParameters(_J,_TaskState);
-       WBCMain.calculateContactConstrainedTaskJacobian();
-       WBCMain.calculateSVDofWeightingMatrix();
+      /* --------------------------------------------------------- */
+      /* ------------------------ set tasks ---------------------- */
+      /* --------------------------------------------------------- */
 
-       _J_wbc_T =  WBCMain._J_k_T;
-       _lambda_wbc = WBCMain._Lambda;
-
-       /* --------------------------------------------------------- */
-       /* --------------------------------------------------------- */
-
-       /* --------------------------------------------------------- */
-       /* ------------------------ set tasks ---------------------- */
-       /* --------------------------------------------------------- */
-
-       //current state (position and orientation)
+      //current state (position and orientation)
       if(_bool_init == false)
       {
         _init_pelvis_position = _model.link_[_model.Upper_Body].Link_position_global;
@@ -198,9 +201,14 @@ void ControlBase::compute()
         _bool_init = true;
       }
 
-      _desired_pelvis_rotation = _init_pelvis_rotation;
-      _desired_right_arm_rotation = _init_right_arm_rotation;
-      _desired_left_arm_rotation = _init_left_arm_rotation;
+      Matrix3d eye3;
+      eye3.setZero();
+      eye3(0,0) = 0.0;
+      eye3(1,2) = 0.0;
+      eye3(2,2) = 0.0;
+      _desired_pelvis_rotation = eye3;//_init_pelvis_rotation;
+      _desired_right_arm_rotation = eye3;//_init_right_arm_rotation;
+      _desired_left_arm_rotation = eye3;//_init_left_arm_rotation;
 
       _desired_right_arm_position = _init_right_arm_position;
       _desired_left_arm_position = _init_left_arm_position;
@@ -214,18 +222,19 @@ void ControlBase::compute()
       }
       else if(control_time_ >=0.8 && control_time_ <1.0)
       {
-        _desired_pelvis_position(0) = cubic(control_time_,0.8,1.0,_init_pelvis_position(0),_init_pelvis_position(0)+0.03,0.0,0.0);
-        _desired_pelvis_position(1) = cubic(control_time_,0.8,1.0,_init_pelvis_position(1),_init_pelvis_position(1)+0.0,0.0,0.0);
+        _desired_pelvis_position(0) = cubic(control_time_,0.8,1.0,_init_pelvis_position(0),_init_pelvis_position(0)+0.0,0.0,0.0);
+        _desired_pelvis_position(1) = cubic(control_time_,0.8,1.0,_init_pelvis_position(1),_init_pelvis_position(1)+0.05,0.0,0.0);
         _desired_pelvis_position(2) = cubic(control_time_,0.8,1.0,_init_pelvis_position(2),_init_pelvis_position(2),0.0,0.0);
 
-        _desired_pelvis_velocity(0) = cubicDot(control_time_,0.8,1.0,_init_pelvis_position(0),_init_pelvis_position(0)+0.03,0.0,0.0,Hz_);
-        _desired_pelvis_velocity(1) = cubicDot(control_time_,0.8,1.0,_init_pelvis_position(1),_init_pelvis_position(1)+0.0,0.0,0.0,Hz_);
-        _desired_pelvis_velocity(2) = cubicDot(control_time_,0.8,1.0,_init_pelvis_position(2),_init_pelvis_position(2),0.0,0.0,Hz_);
+        _desired_pelvis_velocity.setZero();
+        //_desired_pelvis_velocity(0) = cubicDot(control_time_,0.8,1.0,_init_pelvis_position(0),_init_pelvis_position(0)+0.03,0.0,0.0,Hz_);
+        //_desired_pelvis_velocity(1) = cubicDot(control_time_,0.8,1.0,_init_pelvis_position(1),_init_pelvis_position(1)+0.0,0.0,0.0,Hz_);
+        //_desired_pelvis_velocity(2) = cubicDot(control_time_,0.8,1.0,_init_pelvis_position(2),_init_pelvis_position(2),0.0,0.0,Hz_);
       }
       else
       {
-        _desired_pelvis_position(0) = _init_pelvis_position(0) + 0.03;
-        _desired_pelvis_position(1) = _init_pelvis_position(1) + 0.0;
+        _desired_pelvis_position(0) = _init_pelvis_position(0) + 0.0;
+        _desired_pelvis_position(1) = _init_pelvis_position(1) + 0.05;
         _desired_pelvis_position(2) = _init_pelvis_position(2);
         _desired_pelvis_velocity.setZero();
       }
@@ -243,16 +252,44 @@ void ControlBase::compute()
       //cout << "current pos" << endl << _model.link_[_model.Pelvis].Link_position_global << endl <<endl;
       //cout << "error pos" << endl << _pelvis_position_error << endl <<endl;
 
-      double kp = 10000.0;
-      double kd = 100.0;
-      for(int i=0; i<3; i++)
+      double kp = 400.0;
+      double kd = 40.0;
+
+      if(_TaskState == 0)
       {
-        _fstar(i) = kp*_pelvis_position_error(i) + kd*(_desired_pelvis_velocity(i) - _xdot(i));
-        _fstar(i+3) = kp*_pelvis_orientation_error(i) - kd*_xdot(i+3);
-        _fstar(i+6) = kp*_right_arm_position_error(i) + kd*(_desired_right_arm_velocity(i) - _xdot(i+6));
-        _fstar(i+9) = kp*_right_arm_orientation_error(i) - kd*_xdot(i+9);
-        _fstar(i+12) = kp*_left_arm_position_error(i) + kd*(_desired_left_arm_velocity(i) - _xdot(i+12));
-        _fstar(i+15) = kp*_left_arm_orientation_error(i) - kd*_xdot(i+15);
+        for(int i=0; i<3; i++)
+        {
+          _fstar(i) = kp*_pelvis_position_error(i) + kd*(_desired_pelvis_velocity(i) - _xdot(i));
+          _fstar(i+3) = kp*_pelvis_orientation_error(i) - kd*_xdot(i+3);
+          _fstar(i+6) = kp*_right_arm_position_error(i) + kd*(_desired_right_arm_velocity(i) - _xdot(i+6));
+          _fstar(i+9) = kp*_right_arm_orientation_error(i) - kd*_xdot(i+9);
+          _fstar(i+12) = kp*_left_arm_position_error(i) + kd*(_desired_left_arm_velocity(i) - _xdot(i+12));
+          _fstar(i+15) = kp*_left_arm_orientation_error(i) - kd*_xdot(i+15);
+        }
+
+        for(int i=0; i<3; i++)
+        {
+          _kpx_kdxdot_Vector(i) = kp*_model.link_[_model.Upper_Body].Link_position_global(i) +kd*_xdot(i);
+          _kpx_kdxdot_Vector(i+3) = kp*_pelvis_orientation_error(i) +kd*_xdot(i+3);
+          _kpx_kdxdot_Vector(i+6) = kp*_model.link_[_model.Right_Arm+7].Link_position_global(i) +kd*_xdot(i+6);
+          _kpx_kdxdot_Vector(i+9) = kp*_right_arm_orientation_error(i) +kd*_xdot(i+9);
+          _kpx_kdxdot_Vector(i+12) = kp*_model.link_[_model.Left_Arm+7].Link_position_global(i) +kd*_xdot(i+12);
+          _kpx_kdxdot_Vector(i+15) = kp*_left_arm_orientation_error(i) +kd*_xdot(i+15);
+
+          _xd_Vector(i) = _desired_pelvis_position(i);
+          _xd_Vector(i+3) = 0.0;
+          _xd_Vector(i+6) = _desired_right_arm_position(i);
+          _xd_Vector(i+9) = 0.0;
+          _xd_Vector(i+12) = _desired_left_arm_position(i);
+          _xd_Vector(i+15) = 0.0;
+        }
+        _kp_Matrix.resize(taskdof,taskdof);
+        _kp_Matrix.setZero();
+        for(int i=0; i<18; i++)
+        {
+          _kp_Matrix(i,i) = kp;
+        }
+
       }
 
       /* --------------------------------------------------------- */
@@ -261,23 +298,12 @@ void ControlBase::compute()
 
       ros::Time time_temp = ros::Time::now();
 
-      //setup data of first QP
-      real_t H[taskdof_QP*taskdof_QP]; // H in min eq 1/2x'Hx + x'g
-      real_t A[6*taskdof_QP]; // A in s.t. eq lbA<= Ax <=ubA
-      real_t g[taskdof_QP]; //g in min eq 1/2x'Hx + x'g
-      real_t lbA[6]; // lbA in s.t. eq lbA<= Ax <=ubA
-      real_t ubA[6]; // ubA in s.t. eq lbA<= Ax <=ubA
-      real_t lb[taskdof_QP]; //lb in s.t. eq lb <= x <= ub
-      real_t ub[taskdof_QP]; //ub in s.t. eq lb <= x <= ub
-
-      _torque_task =_J_wbc_T*_lambda_wbc*_fstar;      
-      ros::Time time_s = ros::Time::now();
+      _torque_task = WBCMain._J_k_T_Lambda*_fstar;
       WBCMain.calculateContactWrenchLocalContactFrame(_torque_gravity + _torque_task); //caculate contact wrench
-      double s_time = ros::Time::now().toSec() - time_s.toSec();
-      cout <<"calc time" << s_time << endl;
+      _Fc_LocalContactFrame = WBCMain._Fc_LocalContactFrame;
 
       if(_ContactState == 0) //double foot contact
-      {        
+      {
         Vector3d P1;
         P1 = _model.link_[_model.Right_Leg+5].Contact_position - (_model.link_[_model.Right_Leg+5].Contact_position +_model.link_[_model.Left_Leg+5].Contact_position)/2.0;
         Vector3d P2;
@@ -285,7 +311,7 @@ void ControlBase::compute()
         Matrix3d RotFoot;
         RotFoot.setZero();
         double thetaTwoFeet;
-        if(P1(0)>P2(0)) //RotateTwoFeetžžÅ­ ÈžÀü, À§Ä¡žž ÈžÀü
+        if(P1(0)>P2(0))
         {
           thetaTwoFeet = atan(abs(P1(0) - P2(0))/abs(P1(1) - P2(1)));
         }
@@ -313,213 +339,77 @@ void ControlBase::compute()
 
         VectorXd ResultantWrench(6);
         ResultantWrench.setZero();
-        ResultantWrenchTwoContact(P1,P2,RotFoot,WBCMain._Fc_LocalContactFrame,Res,ResultantWrench);
+        ResultantWrenchTwoContact(P1,P2,RotFoot,WBCMain._Fc_LocalContactFrame,Res,ResultantWrench);        
 
         double Fz = ResultantWrench(2);
         double static_fric_coeff = 0.8;
 
+        MatrixXd Res_Jc_bar_T_S_k_T(6,DyrosRedModel::MODEL_DOF);
+        Res_Jc_bar_T_S_k_T = Res*WBCMain._Jc_bar_T_S_k_T;
+        MatrixXd Res_Jc_bar_T_S_k_T_J_k_T_Lambda(6,taskdof);
+        Res_Jc_bar_T_S_k_T_J_k_T_Lambda = Res_Jc_bar_T_S_k_T*WBCMain._J_k_T*WBCMain._Lambda;
 
-        MatrixXd qp_A(6,taskdof);
-        qp_A = Res*WBCMain._Jc_bar_T*WBCMain._S_k_T*WBCMain._J_k_T*WBCMain._Lambda;
+        _A_task_modification = Res_Jc_bar_T_S_k_T_J_k_T_Lambda*_kp_Matrix;
+
+        VectorXd qp_b1(6);
+        qp_b1 = -Res_Jc_bar_T_S_k_T_J_k_T_Lambda*_kpx_kdxdot_Vector;
+        VectorXd qp_b2(6);
+        qp_b2 = Res_Jc_bar_T_S_k_T*_torque_gravity;
+        VectorXd qp_b3(6);
+        qp_b3 = -Res*(WBCMain._pc);
         VectorXd qp_b(6);
-        qp_b = Res*(WBCMain._Jc_bar_T*WBCMain._S_k_T*_torque_gravity - WBCMain._pc);
+        qp_b = qp_b1 + qp_b2 + qp_b3;
 
-        MatrixXd qp_H(taskdof,taskdof);
-        qp_H.setZero();
+        _H_task_modification.setZero();
         for(int i=0; i<3; i++) //trunk pos
         {
-          qp_H(i,i) = 1000.0;
+          _H_task_modification(i,i) = 1000.0;
         }
         for(int i=3; i<taskdof; i++) //else
         {
-          qp_H(i,i) = 500.0;
-        }
-        VectorXd qp_g(taskdof);
-        qp_g = -1.0*qp_H*_fstar;
-
-        VectorXd qp_ubA(6);
-        qp_ubA(0) = -static_fric_coeff*Fz-qp_b(0);
-        qp_ubA(1) = -static_fric_coeff*Fz-qp_b(1);
-        qp_ubA(2) = Fz-qp_b(2);
-        qp_ubA(3) = -width_boundary_cop*Fz-qp_b(3);
-        qp_ubA(4) = -length_boundary_cop*Fz-qp_b(4);
-        qp_ubA(5) = -static_fric_coeff*Fz-qp_b(5);
-        VectorXd qp_lbA(6);
-        qp_lbA(0) = static_fric_coeff*Fz-qp_b(0);
-        qp_lbA(1) = static_fric_coeff*Fz-qp_b(1);
-        qp_lbA(2) = Fz-qp_b(2);
-        qp_lbA(3) = width_boundary_cop*Fz-qp_b(3);
-        qp_lbA(4) = length_boundary_cop*Fz-qp_b(4);
-        qp_lbA(5) = static_fric_coeff*Fz-qp_b(5);
-
-        VectorXd qp_ub(taskdof);
-        VectorXd qp_lb(taskdof);
-        for(int i=0; i<taskdof; i++)
-        {
-          if(_fstar(i) > 0.0) //if positive
-          {
-            qp_ub(i) = _fstar(i);
-            qp_lb(i) = 0.0;
-          }
-          else //if negative
-          {
-            qp_ub(i) = 0.0;
-            qp_lb(i) = _fstar(i);
-          }
-        }
-       //cout <<"qp_lb" <<endl << qp_lb.transpose() << endl <<endl;
-       //cout <<"qp_ub" <<endl << qp_ub.transpose() << endl <<endl;
-
-        for(int i=0; i<taskdof*taskdof; i++)
-        {
-          H[i] = 0.0; //initialize
-        }
-
-        for(int i=0; i<taskdof; i++)
-        {
-          A[0+i] = qp_A(0,i);
-          A[taskdof+i] = qp_A(1,i);
-          A[taskdof*2+i] = qp_A(2,i);
-          A[taskdof*3+i] = qp_A(3,i);
-          A[taskdof*4+i] = qp_A(4,i);
-          A[taskdof*5+i] = qp_A(5,i);
-
-          g[i] = qp_g(i);
-
-          H[i*taskdof+i] = qp_H(i,i);
-
-          ub[i] = qp_ub(i);
-          lb[i] = qp_lb(i);
-        }
-
-        for(int i=0; i<6; i++)
-        {
-          lbA[i] = qp_lbA(i);
-          ubA[i] = qp_ubA(i);
+          _H_task_modification(i,i) = 500.0;
         }        
 
+        //_g_task_modification = -1.0*qp_H*_fstar;
+        _g_task_modification = -1.0*_H_task_modification*_xd_Vector;
+
+        _ubA_task_modification(0) = -static_fric_coeff*Fz-qp_b(0);
+        _ubA_task_modification(1) = -static_fric_coeff*Fz-qp_b(1);
+        _ubA_task_modification(2) = Fz-qp_b(2);
+        _ubA_task_modification(3) = -width_boundary_cop*Fz-qp_b(3);
+        _ubA_task_modification(4) = -length_boundary_cop*Fz-qp_b(4);
+        _ubA_task_modification(5) = -static_fric_coeff*Fz-qp_b(5);
+
+        _lbA_task_modification(0) = static_fric_coeff*Fz-qp_b(0);
+        _lbA_task_modification(1) = static_fric_coeff*Fz-qp_b(1);
+        _lbA_task_modification(2) = Fz-qp_b(2);
+        _lbA_task_modification(3) = width_boundary_cop*Fz-qp_b(3);
+        _lbA_task_modification(4) = length_boundary_cop*Fz-qp_b(4);
+        _lbA_task_modification(5) = static_fric_coeff*Fz-qp_b(5);
       }
-      else if(_ContactState == 1 ||_ContactState == 2) //single foot contact
-      {
-      }
-      else //else
+      else //single foot contact
       {
       }
 
       double QP_setup_time = ros::Time::now().toSec() - time_temp.toSec();
-      cout <<"setup time" << QP_setup_time << endl;
+      cout <<"setup time" << QP_setup_time << endl;      
 
-
-      time_temp = ros::Time::now();
-
-      SQProblem QPModifyTask(taskdof_QP,6); //number of variables (number of tasks), number of constraints (dof of resultant contact wrench)
-      int_t nWSR = 1000;
-      Options options;
-      options.printLevel = PL_NONE;
-      QPModifyTask.setOptions(options);
-
-      //first solve QP
-      returnValue m_status;
-      //m_status = QPModifyTask.init(H,g,A,0,0,lbA,ubA,nWSR); //Only once after changing contact & task state
-      m_status = QPModifyTask.init(H,g,A,lb,ub,lbA,ubA,nWSR); //Only once after changing contact & task state
-
-      real_t xOpt[taskdof_QP];
-      QPModifyTask.getPrimalSolution(xOpt);
-
-      double QP_init_time = ros::Time::now().toSec() - time_temp.toSec();
-      cout <<"init time" << QP_init_time <<endl;
-
-      VectorXd fstar_Opt(taskdof);
-      for(int i=0; i<taskdof; i++)
-      {
-        fstar_Opt(i) = xOpt[i];
-      }
-      //cout <<"fstar" <<endl << _fstar.transpose() << endl <<endl;
-      //cout << "qp fstar" <<endl << fstar_Opt.transpose() << endl <<endl;
-      //cout << "status " << m_status << endl <<endl;
-
-
-      //cout<<"Fc original"<<endl << WBCMain._Fc_LocalContactFrame.transpose() << endl <<endl;
-      //VectorXd torque_test(DyrosRedModel::MODEL_DOF+6);
-      //torque_test =_J_wbc_T*_lambda_wbc*fstar_Opt;
-      //WBCMain.calculateContactWrenchLocalContactFrame(_torque_gravity + torque_test); //caculate contact wrench
-      //cout<<"Fc qp"<<endl << WBCMain._Fc_LocalContactFrame.transpose() << endl <<endl;
-
-      //QPModifyTask.reset();
+      _QP_task_modification.UpdateMinProblem(_H_task_modification,_g_task_modification);
+      _QP_task_modification.UpdateSubjectToAx(_A_task_modification,_lbA_task_modification,_ubA_task_modification);
 
       time_temp = ros::Time::now();
-      //QPModifyTask.hotstart(H,g,A,0,0,lbA,ubA,nWSR);
-      QPModifyTask.hotstart(H,g,A,lb,ub,lbA,ubA,nWSR);
-      QPModifyTask.getPrimalSolution(xOpt);
-      double QP_hotstart_time = ros::Time::now().toSec() - time_temp.toSec();
-      cout << "hotstart time"<< QP_hotstart_time << endl<<endl;
-      //for(int i=0; i<taskdof; i++)
-      //{
-      //  qp_xOpt(i) = xOpt[i];
-      //}
-      //cout << "hotstart" <<endl << qp_xOpt.transpose() << endl <<endl;
+      _Sol_task_modification = _QP_task_modification.SolveQPoases(_nIter);
+      double QP_test_time = ros::Time::now().toSec() - time_temp.toSec();
+      cout <<"qpoases time" << QP_test_time << endl;
+      //cout << "qpoases" <<endl << _Sol_task_modification.transpose() <<endl;
+      //cout << "xd" <<endl << _xd_Vector.transpose() << endl <<endl;
 
-      //getchar();
-
-      /* Setup data of first QP. */
-/*
-        real_t H[2*2] = { 1.0, 0.0, 0.0, 0.5 };
-        real_t A[1*2] = { 1.0, 1.0 };
-        real_t g[2] = { 1.5, 1.0 };
-        real_t lb[2] = { 0.5, -2.0 };
-        real_t ub[2] = { 5.0, 2.0 };
-        real_t lbA[1] = { -1.0 };
-        real_t ubA[1] = { 2.0 };
-*/
-        /* Setup data of second QP. */
-      /*
-        real_t g_new[2] = { 1.0, 1.5 };
-        real_t lb_new[2] = { 0.0, -1.0 };
-        real_t ub_new[2] = { 5.0, -0.5 };
-        real_t lbA_new[1] = { -2.0 };int_t
-        real_t ubA_new[1] = { 1.0 };
-*/
-
-        /* Setting up QProblem object. */
-      /*
-      QProblem example( 2,1 );
-      Options options;
-      options.printLevel = PL_NONE;
-
-      typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, RowMajor> MatrixXdRow;
-
-      MatrixXd H2(2,2);
-      H2.setZero();
-      H2(0, 0) = 1.0;
-      H2(1, 1) = 0.5;
-      MatrixXdRow H2_row = H2;int_t
-      MatrixXdRow A2(1, 2);
-      A2.setOnes();
-
-
-      example.setOptions( options );
-*/
-
-      /* Solve first QP. */
-      /*
-      int nWSR = 10;
-      example.init( H2_row.data() , g, A2.data(), lb, ub,lbA,ubA, nWSR );
-*/
-      /* Get and print solution of first QP. */
-      /*
-      real_t xOpt[2];
-      VectorXd x_sol(2);
-      real_t yOpt[2+1];
-      example.getPrimalSolution( x_sol.data() );
-      // example.getDualSolution( yOpt );
-      cout << x_sol.transpose() << endl;
-*/
       /* --------------------------------------------------------- */
       /* --------------------------------------------------------- */
 
 
-      //_torque_task =_J_wbc_T*_lambda_wbc*_fstar;
-      _torque_task =_J_wbc_T*_lambda_wbc*fstar_Opt;
+      _torque_task = WBCMain._J_k_T_Lambda*_fstar;
+      //_torque_task =WBCMain._J_k_T*WBCMain._Lambda*fstar_Opt;
 
       /* --------------------------------------------------------- */
       /* ------------ Contact Wrench Redistribution -------------- */
@@ -535,13 +425,61 @@ void ControlBase::compute()
         P1 = _model.link_[_model.Right_Leg+5].Contact_position - (_model.link_[_model.Right_Leg+5].Contact_position +_model.link_[_model.Left_Leg+5].Contact_position)/2.0;
         Vector3d P2;
         P2 = _model.link_[_model.Left_Leg+5].Contact_position - (_model.link_[_model.Right_Leg+5].Contact_position +_model.link_[_model.Left_Leg+5].Contact_position)/2.0;
+
+        int contact_num = 2; //two plane contact
+        Matrix3d Rot1;
+        Rot1 = _model.link_[_model.Right_Leg+5].RotationMatrix;
+        Matrix3d Rot2;
+        Rot2 = _model.link_[_model.Left_Leg+5].RotationMatrix;
+
+        VectorXd P_contact;
+        P_contact.resize(6);
+        P_contact.head(3) = P1;
+        P_contact.tail(3) = P2;
+
+        MatrixXd Rot_contact;
+        Rot_contact.resize(3*contact_num,3);
+        Rot_contact.block<3,3>(0,0) = Rot1;
+        Rot_contact.block<3,3>(3,0) = Rot2;
+
+        VectorXd frictionCoeff;
+        frictionCoeff.resize(contact_num);
+        frictionCoeff(0) = 0.8;
+        frictionCoeff(1) = 0.8;
+
+        VectorXd CoP_boundary;
+        CoP_boundary.resize(contact_num*2);
+        CoP_boundary(0) = foot_length/2.0;
+        CoP_boundary(1) = foot_width/2.0;
+        CoP_boundary(2) = foot_length/2.0;
+        CoP_boundary(3) = foot_width/2.0;
+
+        VectorXd Fc_redeistributed;
+        Fc_redeistributed.resize(contact_num*6);
+
+        time_temp = ros::Time::now();
+        DefineQP_PrimalContactWrenchDistributionForMultiContact(_QP_contactwrench_distribution,contact_num,P_contact,Rot_contact,_Fc_LocalContactFrame);
+        Fc_redeistributed = _QP_contactwrench_distribution.SolveQPoases(_nIter);
+        VectorXd Fz_redistributed(contact_num);
+        for(int i=0; i<contact_num; i++)
+        {
+          Fz_redistributed(i) = Fc_redeistributed(2+i*6);
+        }
+        DefineQP_ContactWrenchDistributionForMultiContactInequality(_QP_contactwrench_distribution_mod,contact_num,P_contact,Rot_contact,frictionCoeff,CoP_boundary,_Fc_LocalContactFrame,Fz_redistributed);
+        Fc_redeistributed = _QP_contactwrench_distribution_mod.SolveQPoases(_nIter);
+        double QP_Fc_time = ros::Time::now().toSec() - time_temp.toSec();
+        cout << "QP_Fc time"<< QP_Fc_time << endl<<endl;
+
         VectorXd ResultantWrench(6);
         ResultantWrench.setZero();
         VectorXd RedistributionWrench(12);
         RedistributionWrench.setZero();
         double eta_Fc = 0.0;
 
+        time_temp = ros::Time::now();
         WrenchRedistributionTwoFootContact(0.95,foot_length,foot_width,1.0,0.8,0.8,P1,P2,WBCMain._Fc_LocalContactFrame, ResultantWrench, RedistributionWrench, eta_Fc);
+        double QP_Fc_time2 = ros::Time::now().toSec() - time_temp.toSec();
+        cout << "Fc_time2 time"<< QP_Fc_time2 << endl<<endl;
 
         VectorXd Fc_compensation_d(12);
         Fc_compensation_d.setZero();
@@ -556,6 +494,10 @@ void ControlBase::compute()
         WBCMain.calculateContactWrenchRedistributionTorque(Scw,Fc_compensation_d,torque_contact);
         _torque_contact = torque_contact;
 
+        //cout << "RedistributionWrench"  << endl << RedistributionWrench <<endl<<endl;
+        //cout << "Fc_redeistributed"  << endl << Fc_redeistributed <<endl<<endl;
+
+
       }
 
        /* --------------------------------------------------------- */
@@ -563,9 +505,15 @@ void ControlBase::compute()
     }
 
     _torque_d = _torque_gravity + _torque_task + _torque_contact;// - _qdot*1.0;
+
+    cout <<"torque" <<endl << _torque_d.transpose() <<endl <<endl;
   }
 
   /* --------------------------------------------------------------------- */
+
+  _preContactState = _ContactState;
+  _preTaskState = _TaskState;
+  _bstate_change = false;
 
 
   tick_ ++;
@@ -661,31 +609,98 @@ void ControlBase::parameterInitialize()
 void ControlBase::WBCInitialize()
 {
   ROS_INFO_ONCE("WBC initialize");
+
   _ContactState = 0;
   _TaskState = 0;
+  _preContactState = 1000000; //initial value of_preContactState and _ContactState should be diffrent
+  _preTaskState = 1000000;//initial value _preTaskState and _TaskState should be diffrent
   _Jc.resize(12,DyrosRedModel::MODEL_DOF+6);
   _Jc.setZero();
   _Jc_dot.resize(12,DyrosRedModel::MODEL_DOF+6);
   _Jc_dot.setZero();
   _J.resize(6,DyrosRedModel::MODEL_DOF+6);
-  _J.setZero();
-  _torque_gravity.setZero();  
+  _J.setZero();  
 
-  _Jc_bar_T_S_k_T.resize(12,DyrosRedModel::MODEL_DOF);
-  _Jc_bar_T_S_k_T.setZero();
   _pc.resize(12);
   _pc.setZero();
-  _J_wbc_T.resize(6,DyrosRedModel::MODEL_DOF);
-  _J_wbc_T.setZero();
-  _lambda_wbc.resize(6,6);
-  _lambda_wbc.setZero();
   _fstar.resize(6);
-  _fstar.setZero();
-  _torque_task.setZero();
+  _fstar.setZero();  
   _Fc_LocalContactFrame.resize(12);
   _Fc_LocalContactFrame.setZero();
 
+  _torque_gravity.setZero();
+  _torque_task.setZero();
   _torque_contact.setZero();
+}
+
+void ControlBase::WBCReset(const int &contactdof, const int &taskdof) //call this function when contact and task state change
+{
+  _Jc.resize(contactdof,DyrosRedModel::MODEL_DOF+6);
+  _Jc.setZero();
+  _Jc_dot.resize(contactdof,DyrosRedModel::MODEL_DOF+6);
+  _Jc_dot.setZero();
+  _J.resize(taskdof,DyrosRedModel::MODEL_DOF+6);
+  _J.setZero();
+  _pc.resize(contactdof);
+  _pc.setZero();
+  _fstar.resize(taskdof);
+  _fstar.setZero();
+  _Fc_LocalContactFrame.resize(contactdof);
+  _Fc_LocalContactFrame.setZero();
+}
+
+/* ------------------------------------------------------------------------------------------------------------------------------ */
+/* ------------------------------------------------------------------------------------------------------------------------------ */
+/* ------------------------------------------------------------------------------------------------------------------------------ */
+
+void ControlBase::QPInitialize() //call this function once
+{  
+  _nIter = 1000;
+
+  _H_task_modification.resize(18,18);
+  _H_task_modification.setZero();
+  _g_task_modification.resize(18);
+  _g_task_modification.setZero();
+  _A_task_modification.resize(6,18);
+  _A_task_modification.setZero();
+  _lbA_task_modification.resize(6);
+  _lbA_task_modification.setZero();
+  _ubA_task_modification.resize(6);
+  _ubA_task_modification.setZero();
+  _kp_Matrix.resize(18,18);
+  _kp_Matrix.setZero();
+  _kpx_kdxdot_Vector.resize(18);
+  _kpx_kdxdot_Vector.setZero();
+  _xd_Vector.resize(18);
+  _xd_Vector.setZero();
+  _Sol_task_modification.resize(18);
+  _Sol_task_modification.setZero();
+}
+
+void ControlBase::QPReset(const int &contactdof, const int &taskdof) //call this function when contact and task state change
+{
+  _QP_task_modification.InitializeProblemSize(taskdof,6);
+  _H_task_modification.resize(taskdof,taskdof);
+  _H_task_modification.setZero();
+  _g_task_modification.resize(taskdof);
+  _g_task_modification.setZero();
+  _A_task_modification.resize(6,taskdof);
+  _A_task_modification.setZero();
+  _lbA_task_modification.resize(6);
+  _lbA_task_modification.setZero();
+  _ubA_task_modification.resize(6);
+  _ubA_task_modification.setZero();
+  _kp_Matrix.resize(taskdof,taskdof);
+  _kp_Matrix.setZero();
+  _kpx_kdxdot_Vector.resize(taskdof);
+  _kpx_kdxdot_Vector.setZero();
+  _xd_Vector.resize(taskdof);
+  _xd_Vector.setZero();
+  _Sol_task_modification.resize(taskdof);
+  _Sol_task_modification.setZero();
+
+  _QP_contactwrench_distribution.InitializeProblemSize(contactdof,6);
+  _QP_contactwrench_distribution_mod.InitializeProblemSize(contactdof,6);
 }
 
 /* ------------------------------------------------------------------------------------------------------------------------------ */
@@ -735,14 +750,11 @@ MatrixXd ControlBase::setWBCContactJacobian(const int ContactState)//-0.1368;
     //
     Jc.block(0, 0, 6, DyrosRedModel::MODEL_DOF+6) = _model.link_[_model.Right_Leg+5].J_Contact;    
   }
-  _Jc_dot.resize(contact_dof,DyrosRedModel::MODEL_DOF+6);
-  _pc.resize(contact_dof);
-  _pc.setZero();
-  _Fc_LocalContactFrame.resize(contact_dof);
-  _Fc_LocalContactFrame.setZero();
-  _Jc_bar_T_S_k_T.resize(contact_dof, DyrosRedModel::MODEL_DOF);
-  _Jc_bar_T_S_k_T.setZero();
-
+  //_Jc_dot.resize(contact_dof,DyrosRedModel::MODEL_DOF+6);
+  //_pc.resize(contact_dof);
+  //_pc.setZero();
+  //Fc_LocalContactFrame.resize(contact_dof);
+  //_Fc_LocalContactFrame.setZero();
 
   return Jc;
 }
@@ -803,10 +815,8 @@ MatrixXd ControlBase::setWBCTaskJacobian(const int TaskState)
     J.setZero();
   }
 
-  _fstar.resize(task_dof);
-  _J_wbc_T.resize(DyrosRedModel::MODEL_DOF,task_dof);
-  _lambda_wbc.resize(task_dof,task_dof);
-  _xdot.resize(task_dof);
+  //_fstar.resize(task_dof);
+  //_xdot.resize(task_dof);
 
   return J;
 }
@@ -906,7 +916,187 @@ void ControlBase::ResultantWrenchTwoContact(const Vector3D& P1, const Vector3D& 
 /* ------------------------------------------------------------------------------------------------------------------------------ */
 /* ------------------------------------------------------------------------------------------------------------------------------ */
 /* ------------------------------------------------------------------------------------------------------------------------------ */
-//test//
+
+void ControlBase::DefineQP_PrimalContactWrenchDistributionForMultiContact(CQuadraticProgram &QPprog, const int &plane_contact_num, const VectorXd &arb_P_dis, const MatrixXd &arb_Rot, const VectorXd Fc_LocalContactFrame)
+{
+    const int Fc_dof = plane_contact_num*6;
+    MatrixXd Wmat;
+    Wmat.resize(6,Fc_dof);
+    Wmat.setZero();
+    Vector6d Fc_res;
+    Fc_res.setZero();
+
+    Matrix3d Phat;
+    Phat.setZero();
+    Matrix3d PhatR;
+    for(int k=0; k<plane_contact_num; k++)
+    {
+      Wmat.block<3,3>(0,k*6) = arb_Rot.block<3,3>(3*k,0);
+      Wmat.block<3,3>(3,k*6+3) = arb_Rot.block<3,3>(3*k,0);
+
+      Phat(0,1) = -arb_P_dis(2+k*3);
+      Phat(0,2) = arb_P_dis(1+k*3);
+      Phat(1,0) = arb_P_dis(2+k*3);
+      Phat(1,2) = -arb_P_dis(0+k*3);
+      Phat(2,0) = -arb_P_dis(1+k*3);
+      Phat(2,1) = arb_P_dis(0+k*3);
+      PhatR = Phat*arb_Rot.block<3,3>(3*k,0);
+      Wmat.block<3,3>(3,k*6) = PhatR;
+    }
+
+    Fc_res = Wmat*Fc_LocalContactFrame;
+
+    //set QP problem
+    MatrixXd qp_H(Fc_dof,Fc_dof);
+    qp_H.setZero();
+    for(int i=0; i<Fc_dof; i++)
+    {
+      qp_H(i,i) = 1.0;
+    }
+    for(int i=0; i<plane_contact_num; i++)
+    {
+      qp_H(0+6*i,0+6*i) = 100.0;//*friction_coeff(i);//contact force x
+      qp_H(1+6*i,1+6*i) = 100.0;//*friction_coeff(i);//contact force y
+      qp_H(2+6*i,2+6*i) = 0.0;//*friction_coeff(i);//contact force z
+      qp_H(3+6*i,3+6*i) = 10000000.0;//*CoP_boundary(i*2);//contact moment x
+      qp_H(4+6*i,4+6*i) = 10000000.0;//*CoP_boundary(1+i*2);//contact moment y
+      qp_H(5+6*i,5+6*i) = 10000000.0;//*friction_coeff(i);//contact moment z
+    }
+    MatrixXd qp_A(6,Fc_dof);
+    qp_A = Wmat;
+    VectorXd qp_g(Fc_dof);
+    qp_g.setZero();
+    VectorXd qp_lbA(6);
+    qp_lbA = Fc_res;
+    VectorXd qp_ubA(6);
+    qp_ubA = Fc_res;
+
+    VectorXd qp_lb(Fc_dof);
+    VectorXd qp_ub(Fc_dof);
+    for(int i=0; i<plane_contact_num; i++)
+    {
+      qp_lb(0+6*i) = -1000.0;
+      qp_lb(1+6*i) = -1000.0;
+      qp_lb(2+6*i) = -2000.0;
+      qp_lb(3+6*i) = -1000.0;
+      qp_lb(4+6*i) = -1000.0;
+      qp_lb(5+6*i) = -1000.0;
+
+      qp_ub(0+6*i) = 1000.0;
+      qp_ub(1+6*i) = 1000.0;
+      qp_ub(2+6*i) = 0.0;//0.0;
+      qp_ub(3+6*i) = 1000.0;
+      qp_ub(4+6*i) = 1000.0;
+      qp_ub(5+6*i) = 1000.0;
+    }
+
+    QPprog.EnableEqualityCondition(0.0001);
+    QPprog.UpdateMinProblem(qp_H,qp_g);
+    QPprog.UpdateSubjectToAx(qp_A,qp_lbA,qp_ubA);
+    QPprog.UpdateSubjectToX(qp_lb,qp_ub);
+}
+
+void ControlBase::DefineQP_ContactWrenchDistributionForMultiContactInequality(CQuadraticProgram &QPprog, const int &plane_contact_num, const VectorXd &arb_P_dis, const MatrixXd &arb_Rot, const VectorXd &friction_coeff, const VectorXd &CoP_boundary, const VectorXd Fc_LocalContactFrame, const VectorXd Fz_local_decided)
+{
+  const int Fc_dof = plane_contact_num*6;
+  MatrixXd Wmat;
+  Wmat.resize(6,Fc_dof);
+  Wmat.setZero();
+  Vector6d Fc_res;
+  Fc_res.setZero();
+
+  Matrix3d Phat;
+  Phat.setZero();
+  Matrix3d PhatR;
+  for(int k=0; k<plane_contact_num; k++)
+  {
+    Wmat.block<3,3>(0,k*6) = arb_Rot.block<3,3>(3*k,0);
+    Wmat.block<3,3>(3,k*6+3) = arb_Rot.block<3,3>(3*k,0);
+
+    Phat(0,1) = -arb_P_dis(2+k*3);
+    Phat(0,2) = arb_P_dis(1+k*3);
+    Phat(1,0) = arb_P_dis(2+k*3);
+    Phat(1,2) = -arb_P_dis(0+k*3);
+    Phat(2,0) = -arb_P_dis(1+k*3);
+    Phat(2,1) = arb_P_dis(0+k*3);
+    PhatR = Phat*arb_Rot.block<3,3>(3*k,0);
+    Wmat.block<3,3>(3,k*6) = PhatR;
+  }
+
+  Fc_res = Wmat*Fc_LocalContactFrame;
+
+
+  //set QP problem
+  double tot_Fz = 0.0;
+  for(int i=0; i<plane_contact_num; i++)
+  {
+    tot_Fz = tot_Fz + Fz_local_decided(i);
+  }
+  VectorXd Fz_ratio(plane_contact_num);
+  VectorXd qp_b(Fc_dof);
+  qp_b.setZero();
+  for(int i=0; i<plane_contact_num; i++)
+  {
+    Fz_ratio(i) = (1.0- Fz_local_decided(i)/tot_Fz)*10.0;
+    qp_b(2+i*6) = Fz_local_decided(i);
+  }
+
+  MatrixXd qp_H(Fc_dof,Fc_dof);
+  qp_H.setZero();
+  for(int i=0; i<Fc_dof; i++)
+  {
+    qp_H(i,i) = 1.0;
+  }
+  for(int i=0; i<plane_contact_num; i++)
+  {
+    qp_H(0+6*i,0+6*i) = 10000.0* Fz_ratio(i);//*friction_coeff(i);//contact force x
+    qp_H(1+6*i,1+6*i) = 10000.0* Fz_ratio(i);//*friction_coeff(i);//contact force y
+    qp_H(2+6*i,2+6*i) = 10000.0 * 10.0;//*friction_coeff(i);//contact force z
+    qp_H(3+6*i,3+6*i) = 100.0* Fz_ratio(i);//*CoP_boundary(i*2);//contact moment x
+    qp_H(4+6*i,4+6*i) = 100.0* Fz_ratio(i);//*CoP_boundary(1+i*2);//contact moment y
+    qp_H(5+6*i,5+6*i) = 100.0* Fz_ratio(i);//*friction_coeff(i);//contact moment z
+  }
+
+  MatrixXd qp_A(6,Fc_dof);
+  qp_A = Wmat;
+  VectorXd qp_g(Fc_dof);
+  qp_g.setZero();  
+  qp_g = -1.0*qp_H*qp_b;
+
+  VectorXd qp_lbA(6);
+  qp_lbA = Fc_res;
+  VectorXd qp_ubA(6);
+  qp_ubA = Fc_res;
+
+
+  VectorXd qp_lb(Fc_dof);
+  VectorXd qp_ub(Fc_dof);
+
+  for(int i=0; i<plane_contact_num; i++)
+  {
+    qp_lb(0+6*i) = friction_coeff(i)*Fz_local_decided(i);
+    qp_lb(1+6*i) = friction_coeff(i)*Fz_local_decided(i);
+    qp_lb(2+6*i) = Fz_local_decided(i)*1.5; //margin 1.5
+    qp_lb(3+6*i) = CoP_boundary(i*2)*Fz_local_decided(i);
+    qp_lb(4+6*i) = CoP_boundary(1+i*2)*Fz_local_decided(i);
+    qp_lb(5+6*i) = friction_coeff(i)*Fz_local_decided(i);
+
+    qp_ub(0+6*i) = -friction_coeff(i)*Fz_local_decided(i);
+    qp_ub(1+6*i) = -friction_coeff(i)*Fz_local_decided(i);
+    qp_ub(2+6*i) = Fz_local_decided(i)*0.9;//0.0;
+    qp_ub(3+6*i) = -CoP_boundary(i*2)*Fz_local_decided(i);
+    qp_ub(4+6*i) = -CoP_boundary(1+i*2)*Fz_local_decided(i);
+    qp_ub(5+6*i) = -friction_coeff(i)*Fz_local_decided(i);
+
+  }
+
+  QPprog.EnableEqualityCondition(0.0001);
+  QPprog.UpdateMinProblem(qp_H,qp_g);
+  QPprog.UpdateSubjectToAx(qp_A,qp_lbA,qp_ubA);
+  QPprog.UpdateSubjectToX(qp_lb,qp_ub);
+}
+
+
 void ControlBase::WrenchRedistributionTwoFootContact(double eta_cust, double footlength, double footwidth, double staticFrictionCoeff, double ratio_x, double ratio_y, Vector3D P1, Vector3D P2, VectorXd &F12, VectorXd& ResultantForce, VectorXd& ForceRedistribution, double& eta)
 {
   MatrixXd W(6,12);

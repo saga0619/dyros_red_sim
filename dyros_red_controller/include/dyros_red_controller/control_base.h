@@ -37,8 +37,8 @@
 #include "math_type_define.h"
 #include "dyros_red_controller/dyros_red_model.h"
 #include "wholebodycontroller.h"
+#include "quadraticprogram.h"
 #include <qpOASES.hpp>
-
 
 namespace dyros_red_controller
 {
@@ -80,6 +80,8 @@ protected:
 
   bool _kinematics_update;
   bool _dynamics_update;
+  bool _binit_variables;
+  bool _bstate_change;
 
   VectorQd _q; // current q
   VectorQd _qdot; // current qdot
@@ -113,21 +115,24 @@ protected:
 
   //Variables for whole-body control
   void WBCInitialize();
+  void WBCReset(const int &contactdof, const int &taskdof);
   MatrixXd setWBCContactJacobian(const int ContactState);
   MatrixXd setWBCTaskJacobian(const int TaskState);
+  void DefineQP_TaskModificationContactConstraint(CQuadraticProgram &QPprog);
+  void DefineQP_PrimalContactWrenchDistributionForMultiContact(CQuadraticProgram &QPprog, const int &plane_contact_num, const VectorXd &arb_P_dis, const MatrixXd &arb_Rot, const VectorXd Fc_LocalContactFrame);
+  void DefineQP_ContactWrenchDistributionForMultiContactInequality(CQuadraticProgram &QPprog, const int &plane_contact_num, const VectorXd &arb_P_dis, const MatrixXd &arb_Rot, const VectorXd &friction_coeff, const VectorXd &CoP_boundary, const VectorXd Fc_LocalContactFrame, const VectorXd Fz_local_decided);
   void WrenchRedistributionTwoFootContact(double eta_cust, double footlength, double footwidth, double staticFrictionCoeff, double ratio_x, double ratio_y, Vector3D P1, Vector3D P2, VectorXd &F12, VectorXd& ResultantForce, VectorXd& ForceRedistribution, double& eta);
   void WrenchRedistributionTwoFootContact_CustomEta(double Eta_Standard, double footlength, double footwidth, double staticFrictionCoeff, double ratio_x, double ratio_y, Vector3D P1, Vector3D P2, VectorXd &F12, VectorXd& ResultantForce,  VectorXd& ForceRedistribution);
   void ResultantWrenchTwoContact(const Vector3D& P1, const Vector3D& P2, const Matrix3d& Rot, const VectorXd& F12, MatrixXd &W, VectorXd& ResultantForce);
   int _ContactState;
   int _TaskState;
+  int _preContactState;
+  int _preTaskState;
   MatrixXd _Jc;
-  MatrixXd _Jc_dot;
-  MatrixXd _Jc_bar_T_S_k_T;
+  MatrixXd _Jc_dot;  
   VectorXd _pc;
   VectorXd _Fc_LocalContactFrame;
   MatrixXd _J;
-  MatrixXd _J_wbc_T;
-  MatrixXd _lambda_wbc;
   VectorQd _torque_gravity;
   VectorQd _torque_task;
   VectorQd _torque_contact;
@@ -170,11 +175,30 @@ protected:
   Vector3d _left_foot_orientation_error;
   Vector3d _right_foot_position_error;
   Vector3d _right_foot_orientation_error;
-  VectorXd _xdot;
 
+  VectorXd _xdot;  
 
+  //for QP problem  
+  void QPInitialize();
+  void QPReset(const int &contactdof, const int &taskdof);
+  int _nIter;
+  CQuadraticProgram _QP_task_modification;
+  MatrixXd _H_task_modification;
+  VectorXd _g_task_modification;
+  MatrixXd _A_task_modification;
+  VectorXd _lbA_task_modification;
+  VectorXd _ubA_task_modification;
+  MatrixXd _kp_Matrix;
+  VectorXd _xd_Vector;
+  VectorXd _kpx_kdxdot_Vector;
+  VectorXd _Sol_task_modification;
+
+  CQuadraticProgram _QP_contactwrench_distribution;
+  CQuadraticProgram _QP_contactwrench_distribution_mod;
 
   //TaskController task_controller_;
+
+
 
 protected:
   string current_state_;

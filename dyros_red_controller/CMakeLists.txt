@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 2.8.3)
 project(dyros_red_controller)
 
 add_compile_options(-std=c++11)
-#add_compile_options(-c -03 -w -DLINUX -fPIC)
 
 find_package(catkin REQUIRED COMPONENTS
     dyros_red_msgs
@@ -15,14 +14,6 @@ find_package(catkin REQUIRED COMPONENTS
     eigen_conversions
     )
 find_package(Eigen3 REQUIRED)
-
-# qpOASES #########
-#FIND_PATH(qpOASES_INCLUDE_DIR qpOASES.hpp /usr/include)
-#FIND_LIBRARY(qpOASES_LIBRARY
-#    NAMES qpOASES
-#    PATHS /usr/lib)
-
-
 
 catkin_package(
     DEPENDS   dyros_red_msgs geometry_msgs roscpp sensor_msgs std_msgs realtime_tools eigen_conversions
@@ -56,11 +47,15 @@ file(GLOB CONTROLLER_SRC
 file(GLOB WHOLEBODY_CTRL_SRC
     "src/wholebodycontroller.cpp"
     )
+file(GLOB QUADPROG_SRC
+    "src/quadraticprogram.cpp"
+    )
 
 add_library(dyros_red_controller_lib
     ${BRIDGE_SRC}
     ${CONTROLLER_SRC}
     ${WHOLEBODY_CTRL_SRC}
+    ${QUADPROG_SRC}
     )
 
 
@@ -74,6 +69,7 @@ target_link_libraries(dyros_red_controller_lib
     -lrbdl_urdfreader
     #/usr/local/lib/python2.7/dist-package/qpoases.so
     -lqpOASES
+    -lrt
     )
 target_link_libraries(dyros_red_controller
     dyros_red_controller_lib

@@ -1,6 +1,5 @@
 #include "dyros_red_controller/wholebodycontroller.h"
 
-
 CWholeBodyControl::CWholeBodyControl(int DOF)
 {
   _JOINTNUM = DOF;
@@ -30,6 +29,8 @@ void CWholeBodyControl::initialize()
   _globalAinv.setZero();
   _Jc_bar_T.resize(_JOINTNUM,_JOINTNUM+6);
   _Jc_bar_T.setZero();
+  _Jc_bar_T_S_k_T.resize(_JOINTNUM,_JOINTNUM);
+  _Jc_bar_T_S_k_T.setZero();
   _pc.resize(12);
   _pc.setZero();
   _Pc.resize(_JOINTNUM+6,_JOINTNUM+6);
@@ -48,6 +49,8 @@ void CWholeBodyControl::initialize()
   _J_bar_T.setZero();
   _J_k_T.resize(6,_JOINTNUM);
   _J_k_T.setZero();
+  _J_k_T_Lambda.resize(6,6);
+  _J_k_T_Lambda.setZero();
   _N_k_T.resize(_JOINTNUM,_JOINTNUM);
   _N_k_T.setZero();
   _Fc_LocalContactFrame.resize(12);
@@ -59,6 +62,7 @@ void CWholeBodyControl::initialize()
   _bDynamicParameter = false;
   _bContactParameter = false;
   _bTaskParameter = false;
+  _bContactWrenchCalc = false;
 
   _S_k.resize(_JOINTNUM, _JOINTNUM+6);//Selection Matrix to eliminate virtual joint torque from torque solution
   _S_k.setZero();
@@ -82,7 +86,7 @@ void CWholeBodyControl::initialize()
   _Jc_dot.resize(_Jcrow,_Jccol);
   _Jc_dot.setZero();
   _lambda_c.resize(_Jcrow,_Jcrow);
-  _lambda_c.setZero();
+  _lambda_c.setZero();   
 }
 
 
@@ -115,27 +119,29 @@ MatrixXd CWholeBodyControl::OneSidedInverse(const MatrixXd &A)
 MatrixXd pinv_SVD(const MatrixXd &A, double epsilon = numeric_limits<double>::epsilon())
 {
   JacobiSVD<MatrixXd> svd(A, ComputeThinU | ComputeThinV);
-  double tolerance = epsilon * max(A.cols(), A.rows()) * svd.singularValues().array().abs()(0);
+  double tolerance = epsilon * max(A.cols(), A.rows()) * svd.singularValues().array().abs()(0);  
   return svd.matrixV() * (svd.singularValues().array().abs() > tolerance).select(svd.singularValues().array().inverse(),0).matrix().asDiagonal() * svd.matrixU().adjoint();
 }
 
 
  MatrixXd pinv_QR(const MatrixXd &A) //faster than pinv_SVD,
-{
-    FullPivLU<MatrixXd>lu_decomp(A);
+{   
+   //FullPivHouseholderQR<MatrixXd> qr(A);
+   //qr.compute(A);
+   //qr.setThreshold(10e-10);
+   //return qr.inverse();
 
-    int rank = lu_decomp.rank();
+   ColPivHouseholderQR<MatrixXd> qr(A);
+   qr.setThreshold(10e-10);
+   int rank = qr.rank();
+
     if (rank == 0) {
       cout << "WARN::Input Matrix seems to be zero matrix" << endl;
       return A;
     }
     else {
-     // CompleteOrthogonalDecomposition<MatrixXd> cod(A); //need recent version of Eigen
-     // return cod.pseudoInverse();
-
-      /*
       if (A.rows() > A.cols()) {
-        ColPivHouseholderQR<MatrixXd> qr(A);
+        //ColPivHouseholderQR<MatrixXd> qr(A);
         qr.compute(A);
         MatrixXd R = qr.matrixQR().topLeftCorner(rank, rank).template triangularView<Upper>();
         MatrixXd Rpsinv2(A.cols(), A.rows());
@@ -143,24 +149,34 @@ MatrixXd pinv_SVD(const MatrixXd &A, double epsilon = numeric_limits<double>::ep
         Rpsinv2.setZero();
         Rpsinv2.topLeftCorner(rank, rank) = R.inverse();
 
-        return qr.colsPermutation() * Rpsinv2 * qr.householderQ().inverse();
+        return qr.colsPermutation() * Rpsinv2 * qr.householderQ().transpose();
       }
       else if (A.cols() > A.rows()) {
-        ColPivHouseholderQR<MatrixXd> qr(A.transpose());
+        //ColPivHouseholderQR<MatrixXd> qr(A.transpose());
         qr.compute(A.transpose());
         MatrixXd R = qr.matrixQR().topLeftCorner(rank, rank).template triangularView<Upper>();
         MatrixXd Rpsinv2(A.rows(), A.cols());
 
         Rpsinv2.setZero();
         Rpsinv2.topLeftCorner(rank, rank) = R.inverse();
-        return (qr.colsPermutation() * Rpsinv2 * qr.householderQ().inverse()).transpose();
+        return (qr.colsPermutation() * Rpsinv2 * qr.householderQ().transpose()).transpose();
       }
       else if (A.cols() == A.rows()) {
-        CompleteOrthogonalDecomposition<MatrixXd> cod(A);
-        return cod.pseudoInverse();
+        if(rank == A.cols() && rank == A.cols()) //full rank suqre matrix
+        {
+          return A.inverse();
+        }
+        else //rank deficient matrix
+        {
+          #ifdef EIGEN_3_3
+            CompleteOrthogonalDecomposition<MatrixXd> cod(A);
+            return cod.pseudoInverse();
+          #else
+            pinv_SVD(A,10e-8);
+          #endif
+        }
       }
-      */
-  }
+    }
 }
 
 
@@ -259,9 +275,10 @@ MatrixXd CWholeBodyControl::GenInvSemiPosDef(const int &ContactState, const Matr
 
     if(ContactState == 0) //double contact
     {
-      //tmp_inv = OneSidedInverse(tmp);
+      //tmp_inv = pinv_QR(tmp);
+      //cout << "QR" <<endl <<tmp_inv <<endl<<endl;
       tmp_inv = pinv_SVD(tmp,1.e-10);
-     // tmp_inv = pinv_QR(tmp);
+      //cout << "SVD" <<endl <<tmp_inv <<endl<<endl;
     }
     else if(ContactState == 1 || ContactState == 2) //single contact
     {
@@ -269,7 +286,6 @@ MatrixXd CWholeBodyControl::GenInvSemiPosDef(const int &ContactState, const Matr
     }
     else //else.. require for arm contact for humanods
     {
-      //tmp_inv = OneSidedInverse(tmp);
       tmp_inv = pinv_SVD(tmp,1.e-10);
       //tmp_inv = pinv_QR(tmp);
     }
@@ -526,6 +542,8 @@ void CWholeBodyControl::calculateContactSpaceInvDynamics()
     //////////////////////////////////////// claculate Pc
     _Pc.resize(_Jccol, _Jccol);
     _Pc = Jc_T*_Jc_bar_T;
+
+    _Jc_bar_T_S_k_T = _Jc_bar_T*_S_k_T;
   }
   else
   {
@@ -563,9 +581,9 @@ void CWholeBodyControl::calculateGravityCoriolisCompensationTorque()
   Tmpg = Jg*_globalAinv*(Id_tot-_Pc)*Jg_T;
 
   //////////////////////////////////////// calculate lambda for task, À§ÀÇ _TmpgÀÇ inverse
+
   if(_ContactState == 0) //two foot contact
-  {
-    //_LambdaJointSpace = OneSidedInverse(Tmpg);
+  {    
     _LambdaJointSpace = pinv_SVD(Tmpg,1.e-10);
     //_LambdaJointSpace = pinv_QR(Tmpg);
   }
@@ -615,23 +633,12 @@ void CWholeBodyControl::calculateContactConstrainedTaskJacobian()
   _Lambda.resize(_Jrow, _Jrow);
   _Lambda.setZero();
 
-  if(_TaskState == 0) //comžž ÁŠŸî
-  {
-    _Lambda = Tmp.inverse();
-  }
-  else if(_TaskState == 1 || _TaskState == 2) //com + foot ÁŠŸî
-  {
-    //_Lambda = OneSidedInverse(Tmp);
-    _Lambda = pinv_SVD(Tmp,1.e-10);
-    //_Lambda = pinv_QR(Tmp);
-
-  }
-  else
-  {
-    //_Lambda = OneSidedInverse(Tmp);
-    _Lambda = pinv_SVD(Tmp,1.e-10);
-    //_Lambda = pinv_QR(Tmp);
-  }
+  //_Lambda = Tmp.inverse();
+  //cout << "inv" <<endl <<_Lambda <<endl<<endl;
+  //_Lambda = pinv_QR(Tmp);
+  //cout << "QR" <<endl <<_Lambda <<endl<<endl;
+  _Lambda = pinv_SVD(Tmp,1.e-10);
+  //cout << "SVD" <<endl <<_Lambda <<endl<<endl;
 
   _J_bar_T.resize(_Jrow, _JOINTNUM+6);
   _J_bar_T = _Lambda*_J*_globalAinv*(Id_tot-_Pc);
@@ -644,6 +651,9 @@ void CWholeBodyControl::calculateContactConstrainedTaskJacobian()
 
   _J_k_T.resize(_JOINTNUM,_Jrow);
   _J_k_T = GenInvSemiPosDef(_ContactState, J_bar_T_S_k_T,_W); //if W is semi positive definite, W°¡ positive definiteÀÏ ¶§µµ »ç¿ë °¡ŽÉ
+
+  _J_k_T_Lambda.resize(_JOINTNUM,_Jrow);
+  _J_k_T_Lambda = _J_k_T*_Lambda;
 }
 
 void CWholeBodyControl::calculateNullSpaceJacobian()
@@ -731,7 +741,9 @@ void CWholeBodyControl::calculateContactWrenchLocalContactFrame(const VectorXd &
 {
   _Fc_LocalContactFrame.resize(_ContactState);
   _Fc_LocalContactFrame.setZero();
-  _Fc_LocalContactFrame = _Jc_bar_T*_S_k_T*(Torque) - _pc; //expected contact wrench
+  _Fc_LocalContactFrame = _Jc_bar_T_S_k_T*(Torque) - _pc; //expected contact wrench
+
+  _bContactWrenchCalc = true;
 }
 
 
@@ -741,7 +753,7 @@ void CWholeBodyControl::calculateContactWrenchRedistributionTorque(const MatrixX
   int Scwrow = Scw.rows();
   int V2col = _V2forContactWrenchRedistribution.cols();
   MatrixXd tmp(Scwrow,V2col);
-  tmp = Scw*_Jc_bar_T*_S_k_T*_V2forContactWrenchRedistribution;
+  tmp = Scw*_Jc_bar_T_S_k_T*_V2forContactWrenchRedistribution;
 
   MatrixXd tmp_inv(V2col,Scwrow);
   tmp_inv.setZero();
@@ -761,4 +773,6 @@ void CWholeBodyControl::calculateContactWrenchRedistributionTorque(const MatrixX
   //Torque.resize(_JOINTNUM);
   Torque = _V2forContactWrenchRedistribution*alpha;  
 }
+
+
 
