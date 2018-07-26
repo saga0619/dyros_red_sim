@@ -18,3 +18,13 @@ sudo make install
 ```cpp
 #include <ros.h>
 ```
+
+### qpOASES install ###
+* Download qpOASES and unzip
+```sh cd qpOASES-3.2.1
+mkdir build
+cd build
+cmake ..
+make all
+sudo make install (optional)
+```
